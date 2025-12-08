@@ -5,7 +5,7 @@ struct Airport: Identifiable, Hashable {
     let code: String
     let name: String
     let city: String
-    
+
     static let korean = [
         Airport(code: "ICN", name: "인천국제공항", city: "서울"),
         Airport(code: "GMP", name: "김포국제공항", city: "서울"),

@@ -59,6 +59,9 @@ Carthage/Build/
 
 # API Keys
 Config/Secrets.plist
+Config/APIConfiguration.swift
+DipAir/APIConfiguration.swift
+
 
 # Xcode
 *.xcuserstate

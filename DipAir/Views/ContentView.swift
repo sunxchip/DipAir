@@ -1,8 +1,8 @@
 import SwiftUI
 
 struct ContentView: View {
-    @State private var selectedTab = 0
-    
+    @State private var selectedTab = 1   // 기본은 홈 탭
+
     var body: some View {
         TabView(selection: $selectedTab) {
             
@@ -27,6 +27,7 @@ struct ContentView: View {
         .tint(.blue)
     }
 }
+
 #Preview {
     ContentView()
 }
