@@ -56,17 +56,18 @@ Carthage/Build/
 # For more information about the recommended setup visit:
 # https://docs.fastlane.tools/best-practices/source-control/#source-control
 
+# API Keys 
+DipAir/Config/APIConfiguration.swift
+DipAir/Config/Secrets.plist
 
-# API Keys
-Config/Secrets.plist
-Config/APIConfiguration.swift
-DipAir/APIConfiguration.swift
+**/APIConfiguration.swift
+**/Secrets.plist
 
 
 # Xcode
 *.xcuserstate
 DerivedData/
-DipAir/Config/Secrets.plist
+
 
 fastlane/report.xml
 fastlane/Preview.html
