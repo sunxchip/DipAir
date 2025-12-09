@@ -1,60 +1,73 @@
 import Foundation
 
-// MARK: - 에러 정의
+// MARK: - Error
 
 enum APIError: Error {
     case noToken
-    case invalidResponse(status: Int, body: String)
+    case invalidResponse
 }
 
-// MARK: - 공통 DTO
+// MARK: - OAuth DTO
 
-struct TokenResponse: Codable {
+struct TokenResponse: Decodable {
     let access_token: String
     let expires_in: Int
     let token_type: String
 }
 
-// Flight Inspiration Search
-struct FlightInspirationResponse: Codable {
+// MARK: - Flight Inspiration DTO (/v1/shopping/flight-destinations)
+
+struct FlightInspirationResponse: Decodable {
     let data: [FlightDestination]
 }
 
-struct FlightDestination: Codable {
-    let type: String?
-    let origin: String?
+struct FlightDestination: Decodable, Identifiable {
+    let type: String
+    let origin: String
     let destination: String
     let departureDate: String
-    let returnDate: String
+    let returnDate: String?
     let price: FlightPrice
     let links: FlightDestinationLinks?
+
+    // JSON에는 id가 없어서, 안정적인 식별자를 직접 만들어줌
+    var id: String {
+        "\(origin)-\(destination)-\(departureDate)-\(returnDate ?? "")"
+    }
 }
 
-struct FlightPrice: Codable {
-    let total: String
-    let currency: String?
-}
-
-struct FlightDestinationLinks: Codable {
+struct FlightDestinationLinks: Decodable {
     let flightDates: String?
     let flightOffers: String?
 }
 
-// Flight Cheapest Date Search
-struct FlightDateResponse: Codable {
+struct FlightPrice: Decodable {
+    let total: String
+    let currency: String?
+}
+
+// MARK: - Flight Cheapest Date DTO (/v1/shopping/flight-dates)
+
+struct FlightDatesResponse: Decodable {
     let data: [FlightDateResult]
 }
 
-struct FlightDateResult: Codable {
-    let type: String?
-    let origin: String?
-    let destination: String?
+struct FlightDateResult: Decodable {
+    let type: String
+    let origin: String
+    let destination: String
     let departureDate: String
     let returnDate: String?
     let price: FlightPrice
+    let links: FlightDateLinks?
 }
 
-// MARK: - AmadeusService
+struct FlightDateLinks: Decodable {
+    let flightDestinations: String?
+    let flightOffers: String?
+}
+
+// MARK: - Service
 
 final class AmadeusService {
     static let shared = AmadeusService()
@@ -66,15 +79,15 @@ final class AmadeusService {
     private var tokenExpiry: Date?
 }
 
-// MARK: - 공개 API
+// MARK: - Public API
 
 extension AmadeusService {
 
     /// Flight Inspiration Search
-    /// origin + maxPrice만 던져서 테스트 서버 에러를 최소화
     func searchFlightInspirations(
         origin: String,
-        maxPrice: Int
+        departureDate: String? = nil,
+        maxPrice: String = "600000"
     ) async throws -> [FlightDestination] {
 
         try await authenticateIfNeeded()
@@ -85,11 +98,25 @@ extension AmadeusService {
             resolvingAgainstBaseURL: false
         )!
 
-        components.queryItems = [
+        var queryItems: [URLQueryItem] = [
             URLQueryItem(name: "origin", value: origin),
-            URLQueryItem(name: "maxPrice", value: String(maxPrice))
-            // viewBy, departureDate 등은 테스트 서버에서 500을 많이 내서 일단 제거
+            URLQueryItem(name: "maxPrice", value: maxPrice),
+            URLQueryItem(name: "viewBy", value: "WEEK")
         ]
+
+        // 과거 날짜면 보내지 않음 (400 방지)
+        if let departureDate {
+            let df = DateFormatter()
+            df.dateFormat = "yyyy-MM-dd"
+            if let date = df.date(from: departureDate) {
+                let today = Calendar.current.startOfDay(for: Date())
+                if date >= today {
+                    queryItems.append(URLQueryItem(name: "departureDate", value: departureDate))
+                }
+            }
+        }
+
+        components.queryItems = queryItems
 
         var request = URLRequest(url: components.url!)
         request.httpMethod = "GET"
@@ -99,14 +126,10 @@ extension AmadeusService {
 
         guard let http = response as? HTTPURLResponse,
               (200..<300).contains(http.statusCode) else {
-
             let body = String(data: data, encoding: .utf8) ?? ""
-            print(" Flight Inspiration API error (\( (response as? HTTPURLResponse)?.statusCode ?? -1 )):")
+            print("❌ Flight Inspiration API error (\((response as? HTTPURLResponse)?.statusCode ?? 0)):")
             print(body)
-            throw APIError.invalidResponse(
-                status: (response as? HTTPURLResponse)?.statusCode ?? -1,
-                body: body
-            )
+            throw APIError.invalidResponse
         }
 
         do {
@@ -114,8 +137,8 @@ extension AmadeusService {
             return decoded.data
         } catch {
             let body = String(data: data, encoding: .utf8) ?? ""
-            print(" Decoding error:", error)
-            print(" Raw JSON:", body)
+            print("❌ Decoding error (flight-destinations):", error)
+            print("👉 Raw JSON:", body)
             throw error
         }
     }
@@ -124,28 +147,47 @@ extension AmadeusService {
     func searchFlightDates(
         origin: String,
         destination: String,
-        maxPrice: Int
+        weeksFromNow range: ClosedRange<Int>,
+        maxPrice: Int?
     ) async throws -> [FlightDateResult] {
 
         try await authenticateIfNeeded()
         guard let token = accessToken else { throw APIError.noToken }
+
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+
+        guard
+            let start = calendar.date(byAdding: .weekOfYear, value: range.lowerBound, to: today),
+            let end = calendar.date(byAdding: .weekOfYear, value: range.upperBound, to: today)
+        else {
+            return []
+        }
+
+        let df = DateFormatter()
+        df.dateFormat = "yyyy-MM-dd"
+        let startString = df.string(from: start)
+        let endString = df.string(from: end)
 
         var components = URLComponents(
             url: baseURL.appendingPathComponent("/v1/shopping/flight-dates"),
             resolvingAgainstBaseURL: false
         )!
 
-        // 공식 예제 링크 형식을 최대한 따라감
-        components.queryItems = [
+        var items: [URLQueryItem] = [
             URLQueryItem(name: "origin", value: origin),
             URLQueryItem(name: "destination", value: destination),
-            // 최소/최대 출발일 – 너무 미래 날짜 주면 테스트 데이터가 없어서 오류 날 수 있어서
-            // 여기서는 아예 생략해서 서버 기본값 사용
+            URLQueryItem(name: "departureDate", value: "\(startString),\(endString)"),
             URLQueryItem(name: "oneWay", value: "false"),
-            URLQueryItem(name: "duration", value: "1,15"),
             URLQueryItem(name: "nonStop", value: "false"),
             URLQueryItem(name: "viewBy", value: "DURATION")
         ]
+
+        if let maxPrice {
+            items.append(URLQueryItem(name: "maxPrice", value: String(maxPrice)))
+        }
+
+        components.queryItems = items
 
         var request = URLRequest(url: components.url!)
         request.httpMethod = "GET"
@@ -155,28 +197,33 @@ extension AmadeusService {
 
         guard let http = response as? HTTPURLResponse,
               (200..<300).contains(http.statusCode) else {
-
             let body = String(data: data, encoding: .utf8) ?? ""
-            print(" Flight Dates API error (\( (response as? HTTPURLResponse)?.statusCode ?? -1 )):")
+            print("❌ Flight Dates API error (\((response as? HTTPURLResponse)?.statusCode ?? 0)):")
             print(body)
-            throw APIError.invalidResponse(
-                status: (response as? HTTPURLResponse)?.statusCode ?? -1,
-                body: body
-            )
+            throw APIError.invalidResponse
         }
 
-        let decoded = try JSONDecoder().decode(FlightDateResponse.self, from: data)
-        return decoded.data
+        do {
+            let decoded = try JSONDecoder().decode(FlightDatesResponse.self, from: data)
+            return decoded.data
+        } catch {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            print("❌ Decoding error (flight-dates):", error)
+            print("👉 Raw JSON:", body)
+            throw error
+        }
     }
 }
 
-// MARK: - 인증
+// MARK: - Auth
 
 private extension AmadeusService {
 
     func authenticateIfNeeded() async throws {
-        // 토큰이 남아 있으면 재사용
-        if let expiry = tokenExpiry, expiry > Date() {
+        // 아직 유효한 토큰이면 재사용
+        if let expiry = tokenExpiry,
+           let _ = accessToken,
+           expiry > Date() {
             return
         }
 
@@ -189,35 +236,28 @@ private extension AmadeusService {
             forHTTPHeaderField: "Content-Type"
         )
 
-        // 네가 curl로 쓰던 형식 그대로
-        let bodyString = [
+        let body = [
             "grant_type=client_credentials",
             "client_id=\(APIConfiguration.apiKey)",
             "client_secret=\(APIConfiguration.apiSecret)"
         ].joined(separator: "&")
 
-        request.httpBody = bodyString.data(using: .utf8)
+        request.httpBody = body.data(using: .utf8)
 
         let (data, response) = try await URLSession.shared.data(for: request)
 
         guard let http = response as? HTTPURLResponse,
               (200..<300).contains(http.statusCode) else {
-
-            let body = String(data: data, encoding: .utf8) ?? ""
-            print(" Auth error (\( (response as? HTTPURLResponse)?.statusCode ?? -1 )):")
-            print(body)
-            throw APIError.invalidResponse(
-                status: (response as? HTTPURLResponse)?.statusCode ?? -1,
-                body: body
-            )
+            let text = String(data: data, encoding: .utf8) ?? ""
+            print("❌ Auth error:")
+            print(text)
+            throw APIError.invalidResponse
         }
 
         let decoded = try JSONDecoder().decode(TokenResponse.self, from: data)
         accessToken = decoded.access_token
-
-        // 30분짜리 토큰이니까 1분 여유 두고 만료 처리
         tokenExpiry = Date().addingTimeInterval(TimeInterval(decoded.expires_in - 60))
 
-        print("Amadeus 토큰 발급 성공, \(decoded.expires_in)s 유효")
+        print("✅ Amadeus 토큰 발급 완료 (유효 \(decoded.expires_in)초)")
     }
 }

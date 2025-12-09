@@ -1,68 +1,67 @@
 import SwiftUI
 
 struct HomeView: View {
+
     @StateObject private var vm = HomeViewModel()
-    @State private var selectedDeal: FlightDeal?
 
     var body: some View {
-        NavigationStack {
-            ZStack(alignment: .top) {
-                // 하늘색 그라데이션 배경
-                LinearGradient(
-                    colors: [
-                        Color(red: 0.84, green: 0.92, blue: 1.0),
-                        Color.white
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .ignoresSafeArea()
+        ZStack {
+            // 하늘색 그라데이션 배경
+            LinearGradient(
+                gradient: Gradient(colors: [
+                    Color(red: 0.72, green: 0.83, blue: 1.0),
+                    Color(red: 0.93, green: 0.96, blue: 1.0)
+                ]),
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
 
-                VStack(spacing: 24) {
-                    headerSection
-                    controlCard
-                    contentSection
-                    Spacer()
-                }
-                .padding(.horizontal, 24)
-                .padding(.top, 32)
+            VStack(spacing: 24) {
+                header
+                controlCard
+                contentList
             }
-            .navigationBarHidden(true)
-            .task {
-                await vm.load()
-            }
-            .sheet(item: $selectedDeal) { deal in
-                DetailView(deal: deal)
-            }
+            .padding(.horizontal, 20)
+            .padding(.top, 24)
+        }
+        .navigationBarHidden(true)
+        .task {
+            await vm.load()
         }
     }
 
     // MARK: - 헤더
 
-    private var headerSection: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(todayString)
-                .font(.caption)
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(Date(), formatter: HomeViewModel.dateFormatter)
+                .font(.caption2)
                 .foregroundColor(.secondary)
 
             Text("이번 주,\n어디로 떠나볼까요?")
                 .font(.system(size: 26, weight: .bold))
-                .foregroundColor(.black)
+                .foregroundColor(.white)
+
+            if vm.isUsingDemoData, let reason = vm.demoReason {
+                Text(reason)
+                    .font(.footnote)
+                    .foregroundColor(.white.opacity(0.9))
+            } else if let msg = vm.errorMessage {
+                Text(msg)
+                    .font(.footnote)
+                    .foregroundColor(.yellow)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var todayString: String {
-        let df = DateFormatter()
-        df.locale = Locale(identifier: "ko_KR")
-        df.dateFormat = "오늘은 yyyy년 M월 d일 (E)"
-        return df.string(from: Date())
-    }
-
-    // MARK: - 출발지 / 예산 카드
+    // MARK: - 출발지 + 예산 카드
 
     private var controlCard: some View {
         VStack(alignment: .leading, spacing: 16) {
+
+            // 출발지 세그먼트
             Picker("출발지", selection: $vm.selectedAirportCode) {
                 Text("인천 ICN").tag("ICN")
                 Text("김포 GMP").tag("GMP")
@@ -70,110 +69,131 @@ struct HomeView: View {
             }
             .pickerStyle(.segmented)
 
+            // 직접 IATA 코드 입력
             VStack(alignment: .leading, spacing: 4) {
-                Text("예산: 약 \(vm.budget.formatted())원 이하")
+                Text("직접 IATA 코드 입력 (선택)")
                     .font(.caption)
                     .foregroundColor(.secondary)
 
+                TextField("예: MAD, BOS, LHR …", text: $vm.customOriginCode)
+                    .textInputAutocapitalization(.characters)
+                    .autocorrectionDisabled()
+                    .padding(10)
+                    .background(Color.white)
+                    .cornerRadius(10)
+                    .shadow(color: Color.black.opacity(0.05), radius: 3, x: 0, y: 1)
+
+            }
+
+            // 예산 슬라이더
+            VStack(alignment: .leading, spacing: 4) {
+                Text("예산: 약 \(HomeView.priceFormatter.string(from: NSNumber(value: vm.budget)) ?? "0")원 이하")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+
                 Slider(
-                    value: Binding(
-                        get: { Double(vm.budget) },
-                        set: { vm.budget = Int($0) }
-                    ),
+                    value: $vm.budget,
                     in: 200_000...2_000_000,
                     step: 50_000
                 )
             }
+
         }
-        .padding(16)
-        .background(.white.opacity(0.95))
-        .cornerRadius(18)
-        .shadow(color: Color.black.opacity(0.08), radius: 10, x: 0, y: 4)
+        .padding()
+        .background(.ultraThinMaterial)
+        .cornerRadius(20)
     }
 
-    // MARK: - 콘텐츠 섹션
+    // MARK: - 리스트 / 로딩 / 빈 상태
 
-    private var contentSection: some View {
+    private var contentList: some View {
         Group {
             if vm.isLoading {
-                VStack(spacing: 12) {
+                VStack {
+                    Spacer()
                     ProgressView()
-                    Text("최저가 항공권을 찾는 중이에요…")
-                        .font(.footnote)
-                        .foregroundColor(.secondary)
+                        .tint(.white)
+                    Spacer()
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-
-            } else if let error = vm.errorMessage {
-                VStack(spacing: 8) {
-                    Text(error)
+            } else if vm.thisWeekDeals.isEmpty && vm.nextWeekDeals.isEmpty {
+                VStack {
+                    Spacer()
+                    Text("표시할 항공권이 없습니다.\n예산이나 출발지를 바꿔보세요.")
                         .font(.footnote)
+                        .foregroundColor(.white.opacity(0.9))
                         .multilineTextAlignment(.center)
-                        .foregroundColor(.red)
-                        .padding(.bottom, 8)
-
-                    if vm.primaryDeals.isEmpty && vm.secondaryDeals.isEmpty {
-                        Text("표시할 항공권이 없습니다.\n예산이나 출발지를 바꿔보세요.")
-                            .font(.footnote)
-                            .foregroundColor(.secondary)
-                            .multilineTextAlignment(.center)
-                    } else {
-                        Text("아래 리스트는 예시 데이터일 수 있습니다.")
-                            .font(.footnote)
-                            .foregroundColor(.secondary)
-                    }
+                    Spacer()
                 }
-                .frame(maxWidth: .infinity, alignment: .center)
-
-                resultsList
-
-            } else if vm.primaryDeals.isEmpty && vm.secondaryDeals.isEmpty {
-                VStack(spacing: 8) {
-                    Text("표시할 항공권이 없습니다.")
-                        .font(.footnote)
-                    Text("예산이나 출발지를 바꿔보세요.")
-                        .font(.footnote)
-                        .foregroundColor(.secondary)
-                }
-                .frame(maxWidth: .infinity, alignment: .center)
-
             } else {
-                resultsList
+                List {
+                    if !vm.thisWeekDeals.isEmpty {
+                        Section(header: Text("가까운 일정 추천")) {
+                            ForEach(vm.thisWeekDeals, id: \.id) { deal in
+                                DealRow(deal: deal)
+                            }
+                        }
+                    }
+
+                    if !vm.nextWeekDeals.isEmpty {
+                        Section(header: Text("조금 여유로운 일정")) {
+                            ForEach(vm.nextWeekDeals, id: \.id) { deal in
+                                DealRow(deal: deal)
+                            }
+                        }
+                    }
+                }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .background(Color.clear)
             }
         }
     }
 
-    private var resultsList: some View {
-        ScrollView {
-            LazyVStack(spacing: 16) {
-                if !vm.primaryDeals.isEmpty {
-                    sectionHeader("지금 떠나기 좋은 일정")
-                    ForEach(vm.primaryDeals) { deal in
-                        DealCard(deal: deal)
-                            .onTapGesture { selectedDeal = deal }
-                    }
-                }
+    // MARK: - 가격 포맷터 (Int 변환 없이 안전하게)
 
-                if !vm.secondaryDeals.isEmpty {
-                    sectionHeader("다른 일정도 둘러볼까요?")
-                        .padding(.top, 8)
-                    ForEach(vm.secondaryDeals) { deal in
-                        DealCard(deal: deal)
-                            .onTapGesture { selectedDeal = deal }
-                    }
-                }
-            }
-            .padding(.top, 8)
-            .padding(.bottom, 24)
-        }
-    }
+    private static let priceFormatter: NumberFormatter = {
+        let f = NumberFormatter()
+        f.numberStyle = .decimal
+        f.maximumFractionDigits = 0
+        return f
+    }()
+}
 
-    private func sectionHeader(_ title: String) -> some View {
+// MARK: - 개별 행
+
+struct DealRow: View {
+
+    static let priceFormatter: NumberFormatter = {
+        let f = NumberFormatter()
+        f.numberStyle = .decimal
+        f.maximumFractionDigits = 0
+        return f
+    }()
+
+    let deal: FlightDeal
+
+    var body: some View {
         HStack {
-            Text(title)
-                .font(.headline)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(deal.destinationName)
+                    .font(.headline)
+
+                Text(deal.weekLabel)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
             Spacer()
+
+            VStack(alignment: .trailing, spacing: 2) {
+                Text("\(DealRow.priceFormatter.string(from: NSNumber(value: deal.price)) ?? "-")원")
+                    .font(.headline)
+                Text(deal.currency)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
         }
-        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
     }
 }
+
