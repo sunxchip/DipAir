@@ -106,6 +106,7 @@ DipAir/
    │
    ├─ Assets.xcassets                   # 색상, 아이콘, 앱 심볼
    └─ Config/                           # 빌드/환경 관련 추가 설정
+```
 
 ---
 
@@ -116,6 +117,7 @@ DipAir/
 ```bash
 git clone https://github.com/<your-id>/DipAir.git
 cd DipAir
+```
 
 
 ### 2. Amadeus API 키 발급
