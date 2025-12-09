@@ -5,15 +5,14 @@ import UserNotifications
 class DetailViewModel: ObservableObject {
 
     @Published var priceHistory: [PriceHistory] = []
-    @Published var threshold: Double = 600_000      // 임계가
+    @Published var threshold: Double = 600_000
     @Published var isAlertActive: Bool = false
     @Published var isLoading: Bool = false
 
-    // 통계
-    @Published var averagePrice: Double = 0
-    @Published var minPrice: Double = 0
-    @Published var maxPrice: Double = 0
-    @Published var lastPriceDiffPercent: Double = 0 // 마지막 값이 평균보다 몇 % 낮은지
+    // 선택 사항: 통계 값 (원하면 UI에서 써도 됨)
+    @Published var minPrice: Double?
+    @Published var maxPrice: Double?
+    @Published var averagePrice: Double?
 
     let deal: FlightDeal
     private let service = AmadeusService.shared
@@ -22,7 +21,8 @@ class DetailViewModel: ObservableObject {
         self.deal = deal
     }
 
-    /// 4~8주치 가격 히스토리 로드 (Flight Cheapest Date Search 기반)
+    /// 최근 4~8주 구간 가격 히스토리 로드
+    /// - 실제 API 먼저 시도, 실패하면 랜덤 더미 데이터
     func loadPriceHistory() async {
         isLoading = true
         defer { isLoading = false }
@@ -31,6 +31,7 @@ class DetailViewModel: ObservableObject {
             let raw = try await service.searchFlightDates(
                 origin: deal.origin,
                 destination: deal.destination,
+                weeksFromNow: 4...8,
                 maxPrice: Int(threshold)
             )
 
@@ -41,14 +42,16 @@ class DetailViewModel: ObservableObject {
 
             priceHistory = buildHistory(from: raw)
             updateStats()
-
+            return
         } catch {
-            print(" Detail price history error:", error)
-            generateDummyHistory()
+            print(" Flight Dates 로드 실패:", error)
         }
+
+        // 에러난 경우 더미 데이터
+        generateDummyHistory()
     }
 
-    // MARK: - 알림
+    // MARK: - 알림 관련
 
     func checkThresholdAndScheduleNotification() {
         guard let latest = priceHistory.last else { return }
@@ -67,10 +70,7 @@ class DetailViewModel: ObservableObject {
         content.body = "가격이 \(Int(currentPrice))원으로 임계가 이하로 떨어졌어요."
         content.sound = .default
 
-        let trigger = UNTimeIntervalNotificationTrigger(
-            timeInterval: 1,
-            repeats: false
-        )
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
 
         let request = UNNotificationRequest(
             identifier: UUID().uuidString,
@@ -88,63 +88,68 @@ class DetailViewModel: ObservableObject {
         df.dateFormat = "yyyy-MM-dd"
         let calendar = Calendar.current
 
-        let sorted = raw.sorted {
-            let d1 = df.date(from: $0.departureDate) ?? .distantPast
-            let d2 = df.date(from: $1.departureDate) ?? .distantPast
+        // 출발일 기준 오름차순 정렬
+        let sorted = raw.sorted { lhs, rhs in
+            let d1 = df.date(from: lhs.departureDate) ?? .distantPast
+            let d2 = df.date(from: rhs.departureDate) ?? .distantPast
             return d1 < d2
         }
 
-        let sliced = Array(sorted.prefix(8)) // 최대 8개만
+        // 최대 8개까지만 사용
+        let sliced = Array(sorted.prefix(8))
 
         return sliced.enumerated().map { index, item in
             let date = df.date(from: item.departureDate) ?? Date()
             let comps = calendar.dateComponents([.month, .weekOfMonth], from: date)
-
-            let label = "\(comps.month ?? 0)월 \(comps.weekOfMonth ?? (index+1))주"
-            let price = Double(item.price.total) ?? 0
+            let month = comps.month ?? 0
+            let week = comps.weekOfMonth ?? 0
+            let label = "\(month)월 \(week)주"
 
             return PriceHistory(
-                weekNumber: index + 1,
+                weekNumber: index,
                 weekLabel: label,
-                price: price
+                price: Double(item.price.total) ?? 0
             )
         }
     }
 
     private func updateStats() {
-        guard !priceHistory.isEmpty else { return }
+        guard !priceHistory.isEmpty else {
+            minPrice = nil
+            maxPrice = nil
+            averagePrice = nil
+            return
+        }
 
         let prices = priceHistory.map { $0.price }
-        guard let min = prices.min(), let max = prices.max() else { return }
-
-        let avg = prices.reduce(0, +) / Double(prices.count)
-        averagePrice = avg
-        minPrice = min
-        maxPrice = max
-
-        if let last = prices.last {
-            lastPriceDiffPercent = (avg == 0) ? 0 : (avg - last) / avg * 100
-        }
+        minPrice = prices.min()
+        maxPrice = prices.max()
+        averagePrice = prices.reduce(0, +) / Double(prices.count)
     }
+
+    // MARK: - 더미 데이터 (API 실패 시)
 
     private func generateDummyHistory() {
         var history: [PriceHistory] = []
         let calendar = Calendar.current
         let today = Date()
 
-        for i in 0..<8 {
-            guard let date = calendar.date(byAdding: .weekOfYear, value: -i, to: today) else { continue }
+        for week in 0..<8 {
+            guard let weekDate = calendar.date(byAdding: .weekOfYear, value: -week, to: today)
+            else { continue }
 
-            let comps = calendar.dateComponents([.month, .weekOfMonth], from: date)
-            let label = "\(comps.month ?? 0)월 \(comps.weekOfMonth ?? (i + 1))주"
+            let weekNum = calendar.component(.weekOfYear, from: weekDate)
+            let month = calendar.component(.month, from: weekDate)
 
-            let base = deal.price
+            let basePrice = deal.price
             let variance = Double.random(in: 0.85...1.15)
-            let price = base * variance
+            let price = basePrice * variance
+
+            let label = "\(month)월 \(weekNum)주"
 
             history.append(
                 PriceHistory(
-                    weekNumber: i + 1,
+                    weekNumber: weekNum,
                     weekLabel: label,
                     price: price
                 )
